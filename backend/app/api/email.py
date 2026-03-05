@@ -50,6 +50,30 @@ class EmailCategory(BaseModel):
 
 
 # Endpoints
+@router.post("/", response_model=EmailResponse)
+async def create_email(email: EmailCreate, db: Session = Depends(get_db)):
+    """Create a new email record"""
+    # Check if message_id already exists
+    existing = db.query(Email).filter(Email.message_id == email.message_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email with this message_id already exists")
+    
+    db_email = Email(
+        message_id=email.message_id,
+        sender=email.sender,
+        recipient=email.recipient,
+        subject=email.subject,
+        body=email.body,
+        processed=False
+    )
+    
+    db.add(db_email)
+    db.commit()
+    db.refresh(db_email)
+    
+    return db_email
+
+
 @router.get("/", response_model=List[EmailResponse])
 async def list_emails(
     skip: int = 0,

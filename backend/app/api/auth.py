@@ -2,6 +2,7 @@
 Personal AI Command Center - Auth API
 """
 from datetime import timedelta
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -22,13 +23,14 @@ router = APIRouter()
 
 # Schemas
 class UserCreate(BaseModel):
+    username: str
     email: EmailStr
     password: str
-    name: Optional[str] = None
 
 
 class UserResponse(BaseModel):
     id: int
+    username: str
     email: str
     name: Optional[str]
     created_at: str
@@ -58,11 +60,20 @@ async def register(user: UserCreate, db: Session = Depends(get_db)):
             detail="Email already registered"
         )
     
-    # Create user
+    # Check if username exists
+    existing_username = db.query(User).filter(User.name == user.username).first()
+    if existing_username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already taken"
+        )
+    
+    # Create user with hashed password
+    from app.core.auth import get_password_hash
     db_user = User(
         email=user.email,
-        name=user.name,
-        hashed_password=user.password  # In production, hash this
+        name=user.username,
+        hashed_password=get_password_hash(user.password)
     )
     
     db.add(db_user)
@@ -71,6 +82,7 @@ async def register(user: UserCreate, db: Session = Depends(get_db)):
     
     return UserResponse(
         id=db_user.id,
+        username=db_user.name,
         email=db_user.email,
         name=db_user.name,
         created_at=db_user.created_at.isoformat()
@@ -108,6 +120,7 @@ async def read_users_me(
     """Get current user info"""
     return UserResponse(
         id=current_user.id,
+        username=current_user.name or "",
         email=current_user.email,
         name=current_user.name,
         created_at=current_user.created_at.isoformat()
@@ -129,6 +142,7 @@ async def update_user(
     
     return UserResponse(
         id=current_user.id,
+        username=current_user.name or "",
         email=current_user.email,
         name=current_user.name,
         created_at=current_user.created_at.isoformat()

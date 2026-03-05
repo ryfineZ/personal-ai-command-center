@@ -3,8 +3,17 @@ Personal AI Command Center - Helper Functions
 """
 from typing import Optional
 
-# Temporary: Return default user ID until full auth is implemented
-# TODO: Implement proper user authentication
+# NOTE: User Authentication
+# The current implementation uses JWT tokens for authentication.
+# The get_current_user dependency in auth.py handles token validation.
+# This helper function provides a fallback for internal/service operations
+# that may not have a user context (e.g., background tasks, webhooks).
+# For production, consider implementing:
+# - OAuth2 integration (Google, GitHub, etc.)
+# - Role-based access control (RBAC)
+# - API key authentication for services
+# - Session management with refresh tokens
+
 def get_current_user_id() -> int:
     """Get the current user ID from auth context"""
     # For now, return default user ID

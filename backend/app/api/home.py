@@ -117,27 +117,73 @@ async def control_device(
     
     Requires HITL approval if HITL_ENABLED for certain actions.
     """
+    from app.core.config import settings
+    from app.models.models import HITLRequest, AuditLog
+    from datetime import timedelta
+    
     device = db.query(SmartHomeDevice).filter(SmartHomeDevice.id == device_id).first()
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
     
-    # TODO: Implement actual Home Assistant control
-    # TODO: Create HITL request if HITL_ENABLED
+    # Check if HITL is required for this action
+    hitl_required_actions = ["delete", "reset", "factory_reset"]
+    if settings.HITL_ENABLED and control.action in hitl_required_actions:
+        # Create HITL request for approval
+        hitl_request = HITLRequest(
+            request_type="device_control",
+            description=f"Control {device.name}: {control.action}",
+            data={
+                "device_id": device.id,
+                "device_name": device.name,
+                "action": control.action,
+                "value": control.value
+            },
+            status="pending",
+            expires_at=datetime.utcnow() + timedelta(seconds=settings.HITL_TIMEOUT)
+        )
+        db.add(hitl_request)
+        db.commit()
+        
+        return {
+            "status": "pending_approval",
+            "message": "Device control queued for approval",
+            "hitl_request_id": hitl_request.id,
+            "device_id": device_id,
+            "action": control.action
+        }
+    
+    # Execute control directly
+    from app.services.home_assistant_service import home_assistant_service
     
     # Update device state based on action
     new_state = device.state.copy() if device.state else {}
     
     if control.action == "on":
         new_state["power"] = True
+        await home_assistant_service.turn_on(device.device_id)
     elif control.action == "off":
         new_state["power"] = False
+        await home_assistant_service.turn_off(device.device_id)
     elif control.action == "toggle":
         new_state["power"] = not new_state.get("power", False)
+        await home_assistant_service.toggle(device.device_id)
     elif control.action == "set" and control.value:
         new_state.update(control.value)
+        await home_assistant_service.set_state(device.device_id, control.value)
     
     device.state = new_state
     device.last_updated = datetime.utcnow()
+    db.commit()
+    
+    # Log the action
+    audit_log = AuditLog(
+        user_id=1,  # TODO: Get from auth
+        action=f"device_control_{control.action}",
+        resource="home",
+        resource_id=device.id,
+        details={"action": control.action, "new_state": new_state}
+    )
+    db.add(audit_log)
     db.commit()
     
     return {
@@ -236,9 +282,34 @@ async def execute_scene(
     
     Requires HITL approval if HITL_ENABLED.
     """
-    # TODO: Implement scene execution
-    # TODO: Create HITL request if HITL_ENABLED
+    from app.core.config import settings
+    from app.models.models import HITLRequest, AuditLog
+    from app.services.home_assistant_service import home_assistant_service
+    from datetime import timedelta
     
+    if settings.HITL_ENABLED:
+        # Create HITL request for approval
+        hitl_request = HITLRequest(
+            request_type="device_control",
+            description=f"Execute scene: {scene.name}",
+            data={
+                "scene_name": scene.name,
+                "actions": scene.actions
+            },
+            status="pending",
+            expires_at=datetime.utcnow() + timedelta(seconds=settings.HITL_TIMEOUT)
+        )
+        db.add(hitl_request)
+        db.commit()
+        
+        return {
+            "status": "pending_approval",
+            "message": "Scene execution queued for approval",
+            "hitl_request_id": hitl_request.id,
+            "scene_name": scene.name
+        }
+    
+    # Execute scene directly
     results = []
     for action in scene.actions:
         device_id = action.get("device_id")
@@ -249,14 +320,42 @@ async def execute_scene(
         ).first()
         
         if device:
-            results.append({
-                "device_id": device_id,
-                "device_name": device.name,
-                "action": control,
-                "status": "executed"
-            })
+            try:
+                # Execute control via Home Assistant
+                await home_assistant_service.control_device(device.device_id, control)
+                
+                # Update device state
+                device.last_updated = datetime.utcnow()
+                db.commit()
+                
+                results.append({
+                    "device_id": device_id,
+                    "device_name": device.name,
+                    "action": control,
+                    "status": "executed"
+                })
+            except Exception as e:
+                results.append({
+                    "device_id": device_id,
+                    "device_name": device.name,
+                    "action": control,
+                    "status": "error",
+                    "error": str(e)
+                })
+    
+    # Log the scene execution
+    audit_log = AuditLog(
+        user_id=1,  # TODO: Get from auth
+        action="scene_execute",
+        resource="home",
+        resource_id=0,
+        details={"scene_name": scene.name, "results": results}
+    )
+    db.add(audit_log)
+    db.commit()
     
     return {
+        "status": "executed",
         "scene_name": scene.name,
         "executed_at": datetime.utcnow(),
         "results": results
@@ -270,10 +369,32 @@ async def sync_devices(db: Session = Depends(get_db)):
     
     This endpoint triggers device synchronization from configured Home Assistant instance.
     """
-    # TODO: Implement Home Assistant sync
-    # TODO: Use background task for sync
+    from app.services.home_assistant_service import home_assistant_service
+    from app.models.models import AuditLog
     
-    return {
-        "status": "sync_started",
-        "message": "Device synchronization started"
-    }
+    try:
+        # Sync devices from Home Assistant
+        result = await home_assistant_service.sync_devices(db)
+        
+        # Log the sync
+        audit_log = AuditLog(
+            user_id=1,  # TODO: Get from auth
+            action="device_sync",
+            resource="home",
+            resource_id=0,
+            details={"devices_synced": result.get("count", 0)}
+        )
+        db.add(audit_log)
+        db.commit()
+        
+        return {
+            "status": "sync_completed",
+            "devices_synced": result.get("count", 0),
+            "message": "Device synchronization completed"
+        }
+    except Exception as e:
+        return {
+            "status": "sync_failed",
+            "error": str(e),
+            "message": "Device synchronization failed"
+        }

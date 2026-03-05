@@ -141,15 +141,45 @@ async def send_reply(reply: EmailReply, db: Session = Depends(get_db)):
     
     This endpoint creates a HITL request for approval before sending.
     """
-    # TODO: Implement actual email sending
-    # TODO: Create HITL request if HITL_ENABLED
+    from app.core.config import settings
+    from app.models.models import HITLRequest
+    from datetime import datetime, timedelta
     
-    return {
-        "status": "pending_approval",
-        "message": "Email reply queued for approval",
-        "to": reply.to,
-        "subject": reply.subject
-    }
+    if settings.HITL_ENABLED:
+        # Create HITL request for approval
+        hitl_request = HITLRequest(
+            request_type="email_send",
+            description=f"Send email to {reply.to}: {reply.subject}",
+            data={
+                "to": reply.to,
+                "subject": reply.subject,
+                "body": reply.body,
+                "in_reply_to": reply.in_reply_to
+            },
+            status="pending",
+            expires_at=datetime.utcnow() + timedelta(seconds=settings.HITL_TIMEOUT)
+        )
+        db.add(hitl_request)
+        db.commit()
+        
+        return {
+            "status": "pending_approval",
+            "message": "Email reply queued for approval",
+            "hitl_request_id": hitl_request.id,
+            "to": reply.to,
+            "subject": reply.subject
+        }
+    else:
+        # Send directly if HITL is disabled
+        from app.services.email_service import email_service
+        result = await email_service.send_email(reply.to, reply.subject, reply.body)
+        return {
+            "status": "sent",
+            "message": "Email sent directly (HITL disabled)",
+            "to": reply.to,
+            "subject": reply.subject,
+            "result": result
+        }
 
 
 @router.get("/unread/count")
@@ -166,13 +196,35 @@ async def sync_emails(db: Session = Depends(get_db)):
     
     This endpoint triggers email synchronization from configured IMAP server.
     """
-    # TODO: Implement IMAP sync
-    # TODO: Use background task for sync
+    from app.services.email_service import email_service
+    from app.models.models import AuditLog
     
-    return {
-        "status": "sync_started",
-        "message": "Email synchronization started"
-    }
+    try:
+        # Sync emails from IMAP
+        result = await email_service.sync_emails(db)
+        
+        # Log the sync
+        audit_log = AuditLog(
+            user_id=1,  # TODO: Get from auth
+            action="email_sync",
+            resource="email",
+            resource_id=0,
+            details={"emails_synced": result.get("count", 0)}
+        )
+        db.add(audit_log)
+        db.commit()
+        
+        return {
+            "status": "sync_completed",
+            "emails_synced": result.get("count", 0),
+            "message": "Email synchronization completed"
+        }
+    except Exception as e:
+        return {
+            "status": "sync_failed",
+            "error": str(e),
+            "message": "Email synchronization failed"
+        }
 
 
 @router.delete("/{email_id}")

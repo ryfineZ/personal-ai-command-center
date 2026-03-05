@@ -145,15 +145,91 @@ async def approve_request(
     request.approved_at = datetime.utcnow()
     db.commit()
     
-    # TODO: Trigger the action if approved
-    # TODO: Notify the requesting service
+    # Trigger the action if approved
+    result = None
+    if approval.approved:
+        result = await execute_approved_action(request.request_type, request.data, db)
     
     return {
         "status": request.status,
         "request_id": request_id,
         "approved_at": request.approved_at,
-        "notes": approval.notes
+        "notes": approval.notes,
+        "action_result": result
     }
+
+
+async def execute_approved_action(request_type: str, data: dict, db: Session):
+    """Execute the approved action based on request type"""
+    from app.services.email_service import email_service
+    from app.services.social_service import social_service
+    from app.services.home_assistant_service import home_assistant_service
+    from app.models.models import AuditLog
+    import json
+    
+    result = {"status": "skipped", "message": "Action type not implemented"}
+    
+    try:
+        if request_type == "email_send":
+            # Execute email send
+            to = data.get("to")
+            subject = data.get("subject")
+            body = data.get("body")
+            if to and subject and body:
+                result = await email_service.send_email(to, subject, body)
+                
+        elif request_type == "post_publish":
+            # Execute social media post
+            platform = data.get("platform")
+            content = data.get("content")
+            if platform and content:
+                result = await social_service.post(platform, content)
+                
+        elif request_type == "device_control":
+            # Execute device control
+            device_id = data.get("device_id")
+            action = data.get("action")
+            if device_id and action:
+                result = await home_assistant_service.control_device(device_id, action)
+                
+        elif request_type == "browser_action":
+            # Browser actions are logged for manual execution
+            result = {
+                "status": "logged",
+                "message": "Browser action logged for execution",
+                "action": data
+            }
+            
+        elif request_type == "payment":
+            # Payments require additional verification
+            result = {
+                "status": "pending_verification",
+                "message": "Payment requires additional verification"
+            }
+            
+        elif request_type == "delete_data":
+            # Data deletion is logged and requires manual confirmation
+            result = {
+                "status": "logged",
+                "message": "Data deletion request logged for manual review",
+                "data_type": data.get("data_type")
+            }
+        
+        # Log the action execution
+        audit_log = AuditLog(
+            user_id=1,  # TODO: Get from auth
+            action=f"hitl_action_{request_type}",
+            resource="hitl",
+            resource_id=0,
+            details={"data": data, "result": result}
+        )
+        db.add(audit_log)
+        db.commit()
+        
+    except Exception as e:
+        result = {"status": "error", "message": str(e)}
+    
+    return result
 
 
 @router.post("/{request_id}/expire")

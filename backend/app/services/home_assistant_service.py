@@ -193,6 +193,102 @@ class HomeAssistantService:
             automation_id
         )
     
+    async def control_device(self, entity_id: str, action: str) -> bool:
+        """Control a device with an action"""
+        action_map = {
+            "on": self.turn_on,
+            "off": self.turn_off,
+            "toggle": self.toggle
+        }
+        
+        if action in action_map:
+            return await action_map[action](entity_id)
+        else:
+            print(f"Unknown action: {action}")
+            return False
+    
+    async def set_state(self, entity_id: str, state: Dict) -> bool:
+        """Set state for an entity"""
+        if not self.client:
+            if not await self.connect():
+                return False
+        
+        try:
+            response = await self.client.post(
+                f"/api/states/{entity_id}",
+                json=state
+            )
+            
+            if response.status_code in [200, 201]:
+                return True
+            else:
+                print(f"Error setting state: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"Error setting state: {e}")
+            return False
+    
+    async def sync_devices(self, db) -> dict:
+        """Sync devices from Home Assistant to database"""
+        from app.models.models import SmartHomeDevice
+        
+        try:
+            # Get all states from Home Assistant
+            states = await self.get_states()
+            
+            synced_count = 0
+            for state in states:
+                entity_id = state.get("entity_id", "")
+                
+                # Skip non-device entities
+                domain = entity_id.split(".")[0] if "." in entity_id else ""
+                if domain not in ["light", "switch", "sensor", "climate", "lock", "camera"]:
+                    continue
+                
+                # Check if device already exists
+                existing = db.query(SmartHomeDevice).filter(
+                    SmartHomeDevice.device_id == entity_id
+                ).first()
+                
+                if not existing:
+                    # Create new device
+                    device = SmartHomeDevice(
+                        device_id=entity_id,
+                        name=state.get("attributes", {}).get("friendly_name", entity_id),
+                        device_type=domain,
+                        state={
+                            "state": state.get("state"),
+                            "attributes": state.get("attributes", {})
+                        },
+                        last_updated=datetime.utcnow()
+                    )
+                    db.add(device)
+                    synced_count += 1
+                else:
+                    # Update existing device
+                    existing.state = {
+                        "state": state.get("state"),
+                        "attributes": state.get("attributes", {})
+                    }
+                    existing.last_updated = datetime.utcnow()
+            
+            db.commit()
+            
+            return {
+                "status": "success",
+                "count": synced_count,
+                "total": len(states)
+            }
+            
+        except Exception as e:
+            print(f"Error syncing devices: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "count": 0
+            }
+    
     async def close(self):
         """Close the HTTP client"""
         if self.client:

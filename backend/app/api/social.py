@@ -96,6 +96,10 @@ async def publish_post(post_id: int, db: Session = Depends(get_db)):
     
     Requires HITL approval if HITL_ENABLED.
     """
+    from app.core.config import settings
+    from app.models.models import HITLRequest, AuditLog
+    from datetime import timedelta
+    
     post = db.query(SocialPost).filter(SocialPost.id == post_id).first()
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
@@ -103,20 +107,58 @@ async def publish_post(post_id: int, db: Session = Depends(get_db)):
     if post.status not in ["draft", "scheduled"]:
         raise HTTPException(status_code=400, detail="Post cannot be published")
     
-    # TODO: Implement actual posting to platform
-    # TODO: Create HITL request if HITL_ENABLED
-    
-    post.status = "posted"
-    post.posted_at = datetime.utcnow()
-    post.post_id = f"{post.platform}_{post.id}_{datetime.utcnow().timestamp()}"
-    db.commit()
-    
-    return {
-        "status": "published",
-        "post_id": post_id,
-        "platform": post.platform,
-        "posted_at": post.posted_at
-    }
+    if settings.HITL_ENABLED:
+        # Create HITL request for approval
+        hitl_request = HITLRequest(
+            request_type="post_publish",
+            description=f"Publish to {post.platform}: {post.content[:50]}...",
+            data={
+                "platform": post.platform,
+                "content": post.content,
+                "post_id": post.id
+            },
+            status="pending",
+            expires_at=datetime.utcnow() + timedelta(seconds=settings.HITL_TIMEOUT)
+        )
+        db.add(hitl_request)
+        db.commit()
+        
+        return {
+            "status": "pending_approval",
+            "message": "Post queued for approval",
+            "hitl_request_id": hitl_request.id,
+            "post_id": post_id,
+            "platform": post.platform
+        }
+    else:
+        # Publish directly if HITL is disabled
+        from app.services.social_service import social_service
+        result = await social_service.post(post.platform, post.content)
+        
+        # Update post status
+        post.status = "posted"
+        post.posted_at = datetime.utcnow()
+        post.post_id = result.get("post_id", f"{post.platform}_{post.id}")
+        db.commit()
+        
+        # Log the action
+        audit_log = AuditLog(
+            user_id=1,  # TODO: Get from auth
+            action="post_publish",
+            resource="social",
+            resource_id=post.id,
+            details={"platform": post.platform, "result": result}
+        )
+        db.add(audit_log)
+        db.commit()
+        
+        return {
+            "status": "published",
+            "post_id": post_id,
+            "platform": post.platform,
+            "posted_at": post.posted_at,
+            "result": result
+        }
 
 
 @router.delete("/{post_id}")

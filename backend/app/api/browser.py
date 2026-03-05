@@ -100,29 +100,69 @@ async def execute_task(
     
     Requires HITL approval if HITL_ENABLED for certain task types.
     """
+    from app.core.config import settings
+    from app.models.models import HITLRequest, AuditLog
+    from datetime import timedelta
+    
     task = db.query(BrowserTask).filter(BrowserTask.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    if task.status != "active" and task.status != "manual":
+    if task.status not in ["active", "manual"]:
         raise HTTPException(status_code=400, detail=f"Task is {task.status}")
     
-    # TODO: Implement actual browser automation with Playwright
-    # TODO: Create HITL request if HITL_ENABLED
+    # Check if HITL is required for this task type
+    hitl_required_types = ["form_fill", "login"]
+    if settings.HITL_ENABLED and task.task_type in hitl_required_types:
+        # Create HITL request for approval
+        hitl_request = HITLRequest(
+            request_type="browser_action",
+            description=f"Execute browser task: {task.name}",
+            data={
+                "task_id": task.id,
+                "task_type": task.task_type,
+                "config": task.config,
+                "params": execute.params
+            },
+            status="pending",
+            expires_at=datetime.utcnow() + timedelta(seconds=settings.HITL_TIMEOUT)
+        )
+        db.add(hitl_request)
+        db.commit()
+        
+        return {
+            "status": "pending_approval",
+            "message": "Browser task queued for approval",
+            "hitl_request_id": hitl_request.id,
+            "task_id": task_id
+        }
+    
+    # Execute browser task directly
+    from app.services.browser_service import browser_service
+    result = await browser_service.execute_task(task.task_type, task.config, execute.params)
     
     # Update task execution
     task.last_run = datetime.utcnow()
-    task.result = {
-        "status": "success",
-        "executed_at": datetime.utcnow().isoformat(),
-        "params": execute.params
-    }
+    task.result = result
+    if result.get("status") == "success":
+        task.status = "completed"
+    db.commit()
+    
+    # Log the action
+    audit_log = AuditLog(
+        user_id=1,  # TODO: Get from auth
+        action=f"browser_task_{task.task_type}",
+        resource="browser",
+        resource_id=task.id,
+        details={"result": result}
+    )
+    db.add(audit_log)
     db.commit()
     
     return {
         "status": "executed",
         "task_id": task_id,
-        "result": task.result
+        "result": result
     }
 
 
@@ -247,14 +287,54 @@ async def quick_form_fill(
     
     Requires HITL approval if HITL_ENABLED.
     """
-    # TODO: Implement form filling with Playwright
-    # TODO: Create HITL request if HITL_ENABLED
+    from app.core.config import settings
+    from app.models.models import HITLRequest, AuditLog
+    from datetime import timedelta
+    
+    if settings.HITL_ENABLED:
+        # Create HITL request for approval
+        hitl_request = HITLRequest(
+            request_type="browser_action",
+            description=f"Fill form at {url}",
+            data={
+                "url": url,
+                "fields": fields,
+                "submit": submit
+            },
+            status="pending",
+            expires_at=datetime.utcnow() + timedelta(seconds=settings.HITL_TIMEOUT)
+        )
+        db.add(hitl_request)
+        db.commit()
+        
+        return {
+            "status": "pending_approval",
+            "message": "Form fill queued for approval",
+            "hitl_request_id": hitl_request.id,
+            "url": url
+        }
+    
+    # Execute form fill directly
+    from app.services.browser_service import browser_service
+    result = await browser_service.fill_form(url, fields, submit)
+    
+    # Log the action
+    audit_log = AuditLog(
+        user_id=1,  # TODO: Get from auth
+        action="browser_form_fill",
+        resource="browser",
+        resource_id=0,
+        details={"url": url, "fields": list(fields.keys()), "result": result}
+    )
+    db.add(audit_log)
+    db.commit()
     
     return {
-        "status": "pending_approval" if True else "executed",
+        "status": "executed",
         "url": url,
         "fields": fields,
-        "submit": submit
+        "submit": submit,
+        "result": result
     }
 
 
@@ -265,11 +345,27 @@ async def quick_screenshot(
     db: Session = Depends(get_db)
 ):
     """Take a screenshot of a web page"""
-    # TODO: Implement screenshot with Playwright
+    from app.services.browser_service import browser_service
+    from app.models.models import AuditLog
+    
+    # Take screenshot
+    result = await browser_service.take_screenshot(url, full_page)
+    
+    # Log the action
+    audit_log = AuditLog(
+        user_id=1,  # TODO: Get from auth
+        action="browser_screenshot",
+        resource="browser",
+        resource_id=0,
+        details={"url": url, "full_page": full_page, "result": result}
+    )
+    db.add(audit_log)
+    db.commit()
     
     return {
         "status": "success",
         "url": url,
         "full_page": full_page,
-        "screenshot_url": f"/screenshots/{datetime.utcnow().timestamp()}.png"
+        "screenshot_url": result.get("screenshot_url"),
+        "screenshot_path": result.get("screenshot_path")
     }

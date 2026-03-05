@@ -267,6 +267,56 @@ Reply:"""
         except Exception as e:
             print(f"Error generating reply: {e}")
             return "Thank you for your email. I will get back to you soon."
+    
+    async def sync_emails(self, db, limit: int = 50) -> dict:
+        """Sync emails from IMAP to database"""
+        from app.models.models import Email
+        
+        try:
+            # Get emails from IMAP
+            emails = await self.list_emails(limit=limit)
+            
+            synced_count = 0
+            for email_data in emails:
+                # Check if email already exists
+                existing = db.query(Email).filter(
+                    Email.message_id == email_data["id"]
+                ).first()
+                
+                if not existing:
+                    # Classify email
+                    category = await self.classify_email(email_data)
+                    
+                    # Create new email record
+                    new_email = Email(
+                        message_id=email_data["id"],
+                        sender=email_data["sender"],
+                        recipient=self.email_address,
+                        subject=email_data["subject"],
+                        body=email_data["body"],
+                        category=category,
+                        processed=False
+                    )
+                    db.add(new_email)
+                    synced_count += 1
+            
+            db.commit()
+            
+            return {
+                "status": "success",
+                "count": synced_count,
+                "total": len(emails)
+            }
+            
+        except Exception as e:
+            print(f"Error syncing emails: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "count": 0
+            }
+        finally:
+            await self.disconnect()
 
 
 # Create instance

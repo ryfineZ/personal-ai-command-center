@@ -8,8 +8,8 @@ from datetime import datetime
 from pydantic import BaseModel, EmailStr
 
 from app.core.database import get_db
-from app.models.models import Email
-
+from app.models.models import Email, AuditLog, User
+from app.core.auth import get_current_user
 router = APIRouter()
 
 
@@ -190,7 +190,7 @@ async def get_unread_count(db: Session = Depends(get_db)):
 
 
 @router.post("/sync")
-async def sync_emails(db: Session = Depends(get_db)):
+async def sync_emails(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Sync emails from IMAP server
     
@@ -205,7 +205,7 @@ async def sync_emails(db: Session = Depends(get_db)):
         
         # Log the sync
         audit_log = AuditLog(
-            user_id=1,  # TODO: Get from auth
+            user_id=current_user.id,
             action="email_sync",
             resource="email",
             resource_id=0,

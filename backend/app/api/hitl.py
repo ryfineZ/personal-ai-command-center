@@ -9,8 +9,8 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.models import HITLRequest
-
+from app.models.models import HITLRequest, AuditLog, User
+from app.core.auth import get_current_user
 router = APIRouter()
 
 
@@ -159,7 +159,7 @@ async def approve_request(
     }
 
 
-async def execute_approved_action(request_type: str, data: dict, db: Session):
+async def execute_approved_action(request_type: str, data: dict, db: Session, current_user: User = None):
     """Execute the approved action based on request type"""
     from app.services.email_service import email_service
     from app.services.social_service import social_service
@@ -217,7 +217,7 @@ async def execute_approved_action(request_type: str, data: dict, db: Session):
         
         # Log the action execution
         audit_log = AuditLog(
-            user_id=1,  # TODO: Get from auth
+            user_id=current_user.id,
             action=f"hitl_action_{request_type}",
             resource="hitl",
             resource_id=0,

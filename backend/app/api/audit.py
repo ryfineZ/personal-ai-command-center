@@ -8,8 +8,8 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models.models import AuditLog
-
+from app.models.models import AuditLog, User
+from app.core.auth import get_current_user
 router = APIRouter()
 
 
@@ -66,10 +66,10 @@ async def list_logs(
 
 
 @router.post("/", response_model=AuditLogResponse)
-async def create_log(log: AuditLogCreate, db: Session = Depends(get_db)):
+async def create_log(log: AuditLogCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Create an audit log entry"""
     db_log = AuditLog(
-        user_id=1,  # TODO: Get from auth
+        user_id=current_user.id,
         action=log.action,
         resource=log.resource,
         resource_id=log.resource_id,

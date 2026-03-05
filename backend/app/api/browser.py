@@ -8,8 +8,8 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models.models import BrowserTask
-
+from app.models.models import BrowserTask, AuditLog, HITLRequest, User
+from app.core.auth import get_current_user
 router = APIRouter()
 
 
@@ -150,7 +150,7 @@ async def execute_task(
     
     # Log the action
     audit_log = AuditLog(
-        user_id=1,  # TODO: Get from auth
+        user_id=current_user.id,
         action=f"browser_task_{task.task_type}",
         resource="browser",
         resource_id=task.id,
@@ -320,7 +320,7 @@ async def quick_form_fill(
     
     # Log the action
     audit_log = AuditLog(
-        user_id=1,  # TODO: Get from auth
+        user_id=current_user.id,
         action="browser_form_fill",
         resource="browser",
         resource_id=0,
@@ -353,7 +353,7 @@ async def quick_screenshot(
     
     # Log the action
     audit_log = AuditLog(
-        user_id=1,  # TODO: Get from auth
+        user_id=current_user.id,
         action="browser_screenshot",
         resource="browser",
         resource_id=0,

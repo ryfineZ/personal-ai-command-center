@@ -8,8 +8,8 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models.models import SmartHomeDevice
-
+from app.models.models import SmartHomeDevice, AuditLog, HITLRequest, User
+from app.core.auth import get_current_user
 router = APIRouter()
 
 
@@ -177,7 +177,7 @@ async def control_device(
     
     # Log the action
     audit_log = AuditLog(
-        user_id=1,  # TODO: Get from auth
+        user_id=current_user.id,
         action=f"device_control_{control.action}",
         resource="home",
         resource_id=device.id,
@@ -345,7 +345,7 @@ async def execute_scene(
     
     # Log the scene execution
     audit_log = AuditLog(
-        user_id=1,  # TODO: Get from auth
+        user_id=current_user.id,
         action="scene_execute",
         resource="home",
         resource_id=0,
@@ -363,7 +363,7 @@ async def execute_scene(
 
 
 @router.post("/sync")
-async def sync_devices(db: Session = Depends(get_db)):
+async def sync_devices(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Sync devices from Home Assistant
     
@@ -378,7 +378,7 @@ async def sync_devices(db: Session = Depends(get_db)):
         
         # Log the sync
         audit_log = AuditLog(
-            user_id=1,  # TODO: Get from auth
+            user_id=current_user.id,
             action="device_sync",
             resource="home",
             resource_id=0,

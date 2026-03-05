@@ -8,8 +8,8 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models.models import SocialPost
-
+from app.models.models import SocialPost, AuditLog, User
+from app.core.auth import get_current_user
 router = APIRouter()
 
 
@@ -90,7 +90,7 @@ async def get_post(post_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{post_id}/publish")
-async def publish_post(post_id: int, db: Session = Depends(get_db)):
+async def publish_post(post_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Publish post to social media platform
     
@@ -143,7 +143,7 @@ async def publish_post(post_id: int, db: Session = Depends(get_db)):
         
         # Log the action
         audit_log = AuditLog(
-            user_id=1,  # TODO: Get from auth
+            user_id=current_user.id,
             action="post_publish",
             resource="social",
             resource_id=post.id,
